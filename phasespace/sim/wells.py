@@ -41,6 +41,10 @@ SEGREGATED = "segregated"
 INTERMITTENT = "intermittent"
 DISTRIBUTED = "distributed"
 TRANSITION = "transition"
+# Not one of Beggs-Brill's four. A dry gas well has no liquid to hold up or
+# slip against, so the two-phase machinery does not describe it and the
+# regime is reported honestly rather than forced into the nearest label.
+SINGLE_PHASE_GAS = "single phase gas"
 
 
 # ============================================================== inflow ======
@@ -300,6 +304,37 @@ def beggs_brill_gradient(
     mu_l = oil_at_t.viscosity_cp(p_psia)
     mu_g = gas_at_t.viscosity_cp(max(p_psia, 1.0))
     surface_tension = 30.0  # dyne/cm, a representative oil/gas value
+
+    if lambda_l <= 0.0:
+        # A dry gas well. Beggs-Brill's regime boundaries are powers of the
+        # no-slip liquid holdup -- L2 goes as lambda_l^-2.4684 -- so at zero
+        # liquid they are not merely inaccurate but undefined, and the slip
+        # correction y = lambda_l / H_L^2 is 0/0.
+        #
+        # The physics at zero liquid is single-phase gas, so that is what is
+        # computed: elevation from gas density, friction from the gas
+        # Reynolds number with no two-phase multiplier, and the same
+        # kinetic-energy term, which is exactly where it matters on a
+        # high-rate gas well.
+        reynolds = 1488.0 * rho_g * v_m * d_ft / max(mu_g, 1e-9)
+        f_g = _no_slip_friction_factor(
+            reynolds, tubing.roughness_in / tubing.inner_diameter_in)
+        elevation_psi_ft = rho_g * math.sin(theta) / 144.0
+        friction_psi_ft = (f_g * rho_g * v_m * v_m
+                           / (2.0 * GRAVITY_FT_S2 * d_ft) / 144.0)
+        e_k = min(rho_g * v_m * v_sg
+                  / (GRAVITY_FT_S2 * max(p_psia, 1.0) * 144.0), 0.9)
+        return {
+            "gradient_psi_ft": (elevation_psi_ft + friction_psi_ft) / (1.0 - e_k),
+            "elevation_psi_ft": elevation_psi_ft,
+            "friction_psi_ft": friction_psi_ft,
+            "holdup": 0.0,
+            "regime": SINGLE_PHASE_GAS,
+            "mixture_velocity_ft_s": v_m,
+            "superficial_gas_velocity_ft_s": v_sg,
+            "superficial_liquid_velocity_ft_s": 0.0,
+            "slip_density_lb_ft3": rho_g,
+        }
 
     n_fr = v_m * v_m / (GRAVITY_FT_S2 * d_ft)
     n_lv = 1.938 * v_sl * (rho_l / max(surface_tension, 1e-6)) ** 0.25

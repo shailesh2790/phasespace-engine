@@ -151,7 +151,7 @@ from the build that made it:
 
 ```python
 from phasespace.sim.provenance import engine_fingerprint, verify_fingerprint
-engine_fingerprint()     # '94a3d8c7bf45'
+engine_fingerprint()     # 'b3e4778b235b'
 verify_fingerprint()     # (True, stamped, computed)
 ```
 

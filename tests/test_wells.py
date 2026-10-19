@@ -15,6 +15,7 @@ from phasespace.sim.fluids import GasProperties, LiquidProperties
 from phasespace.sim.wells import (
     BEGGS_BRILL,
     HAGEDORN_BROWN,
+    SINGLE_PHASE_GAS,
     CompositeIPR,
     FetkovichIPR,
     GasBackpressureIPR,
@@ -380,3 +381,56 @@ def test_gas_lift_curve_has_an_interior_optimum():
     assert 0 < peak < len(oil_rates) - 1, "no interior optimum: %s" % oil_rates
     # And the fall-off past the peak is real, not numerical noise.
     assert oil_rates[-1] < max(oil_rates) * 0.98
+
+
+# ------------------------------------------- the dry gas well that crashed --
+
+
+def test_beggs_brill_handles_a_dry_gas_well():
+    """A regression. Beggs-Brill's regime boundaries are powers of the
+    no-slip liquid holdup -- L2 goes as lambda_l ** -2.4684 -- so a well
+    with no liquid at all raised 0.0 to a negative power and the default
+    correlation crashed on one of the commonest well types there is.
+
+    The physics at zero liquid is single-phase gas, and that is what it now
+    reports, including saying so in the regime rather than forcing the
+    answer into one of Beggs-Brill's four two-phase labels.
+    """
+    tubing = Tubing(depth_ft=8000.0, inner_diameter_in=2.441)
+    dry = ProductionStream(gas_rate_scf_d=1.5e6, gas=GAS)
+    assert dry.liquid_rate_stb_d == 0.0
+
+    result = pressure_traverse(400.0, dry, tubing, correlation=BEGGS_BRILL)
+
+    assert result.bottomhole_pressure_psia > 400.0
+    assert all(r == SINGLE_PHASE_GAS for r in result.regimes)
+    # No liquid means no holdup, by definition rather than by correlation.
+    assert all(h == 0.0 for h in result.holdups)
+
+
+def test_the_dry_gas_answer_agrees_with_hagedorn_brown():
+    """The cross-check that says the single-phase branch is right rather
+    than merely non-crashing. Two independent code paths on a column of
+    pure gas should land close; a sign error or a density mistake in the
+    new branch would show up here as tens of percent."""
+    tubing = Tubing(depth_ft=8000.0, inner_diameter_in=2.441)
+    dry = ProductionStream(gas_rate_scf_d=1.5e6, gas=GAS)
+
+    bb = pressure_traverse(400.0, dry, tubing, correlation=BEGGS_BRILL)
+    hb = pressure_traverse(400.0, dry, tubing, correlation=HAGEDORN_BROWN)
+
+    difference = abs(bb.bottomhole_pressure_psia - hb.bottomhole_pressure_psia)
+    assert difference / hb.bottomhole_pressure_psia < 0.05, (
+        "Beggs-Brill %.1f vs Hagedorn-Brown %.1f psia on dry gas"
+        % (bb.bottomhole_pressure_psia, hb.bottomhole_pressure_psia))
+
+
+def test_a_trace_of_liquid_still_uses_the_two_phase_correlation():
+    """The guard must not swallow wells that do have liquid: five barrels a
+    day is a two-phase well and has to stay on the two-phase path."""
+    tubing = Tubing(depth_ft=8000.0, inner_diameter_in=2.441)
+    wet = ProductionStream(gas_rate_scf_d=1.5e6, oil_rate_stb_d=5.0,
+                           oil=OIL, gas=GAS)
+    result = pressure_traverse(400.0, wet, tubing, correlation=BEGGS_BRILL)
+    assert all(r != SINGLE_PHASE_GAS for r in result.regimes)
+    assert result.bottomhole_pressure_psia > 0.0
