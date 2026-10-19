@@ -2,7 +2,7 @@
 
 This project is for people who have run wells, read the papers, or both.
 Domain knowledge is worth more here than Python fluency, and a well-argued
-issue that says "your Gray correlation will be wrong for condensate above
+issue that says "Hagedorn-Brown will mislead you for condensate above
 this GLR, here is the paper" is a real contribution even with no code
 attached.
 
@@ -39,14 +39,14 @@ belongs there:
 * **NORSOK M-506 alongside de Waard & Milliams.** The two disagree, and
   reporting both with the disagreement visible is more honest than
   picking one. `phasespace/sim/integrity.py`
-* **Fetkovich and Jones IPR variants** beyond what is in
-  `phasespace/sim/wells.py`.
-* **Gray correlation tuning for gas condensate** — currently the
-  correlation is present but has not been exercised against condensate
-  behaviour.
-* **Hydrate inhibitor injection rates** — Hammerschmidt gives the
-  depression; turning that into a methanol or MEG rate is the step
-  operators actually need. `phasespace/sim/flowassurance.py`
+* **The Jones IPR**, which adds a turbulence term Vogel and Fetkovich
+  lack. `phasespace/sim/wells.py` already has Vogel, Fetkovich,
+  productivity-index, composite and gas back-pressure forms, so this
+  slots in beside them.
+* **The Gray correlation**, which is absent. It is the usual choice for
+  gas condensate, where the two correlations here were developed on
+  something else -- Hagedorn-Brown on vertical oil wells and Beggs-Brill
+  on an inclined air-water loop.
 * **Flow-regime transition criteria** other than Beggs–Brill's, for
   example Taitel–Dukler.
 * **Temperature prediction.** The thermal model is given measured

@@ -121,7 +121,7 @@ how fast it is reached, and the solver verifies that it didn't.
 
 | Area | Methods |
 |---|---|
-| Multiphase flow | Beggs–Brill, Hagedorn–Brown, Gray; flow-regime maps |
+| Multiphase flow | Beggs–Brill, Hagedorn–Brown; flow-regime maps |
 | Gas flow | Weymouth, Panhandle A/B, AGA; Dranchuk–Abou-Kassem Z with Sutton pseudo-criticals and Wichert–Aziz sour correction |
 | PVT | Standing, Vazquez–Beggs, Lee–Gonzalez–Eakin viscosity, real-gas pseudopressure |
 | Nodal analysis | IPR/VLP intersection with high-side bracketing; Vogel, Fetkovich, Rawlins & Schellhardt, Houpeurt |
@@ -130,7 +130,7 @@ how fast it is reached, and the solver verifies that it didn't.
 | Artificial lift | Continuous and intermittent gas lift, Asheim F1/F2 stability, valve mechanics, Gibbs damped rod-string wave equation |
 | Flow assurance | Hammerschmidt hydrates, Turner/Coleman critical velocity, erosional velocity (API RP 14E) |
 | Integrity | de Waard & Milliams CO₂ corrosion with siderite film and oil-wetting flags |
-| Uncertainty | Split conformal prediction, CQR, ES-MDA, Sobol/QMC sampling |
+| Uncertainty | Split conformal prediction, CQR, ES-MDA history matching |
 
 Dependencies: `phasespace/sim` — the whole of the above except the
 reservoir models — runs on **numpy and the standard library alone**, and
