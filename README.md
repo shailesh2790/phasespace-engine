@@ -143,6 +143,57 @@ and the engine falls back to dense numpy when it is not.
 `phasespace/reservoir` (CRM and the synthetic generators) does require
 scipy, and is not under that constraint.
 
+## Use it from an agent
+
+The engine ships as an [MCP](https://modelcontextprotocol.io) server, so a
+language model can call the physics instead of imitating it:
+
+```bash
+python -m phasespace.mcp --list      # the catalogue
+python -m phasespace.mcp             # serve on stdio
+```
+
+```json
+{
+  "mcpServers": {
+    "phasespace": {
+      "command": "python",
+      "args": ["-m", "phasespace.mcp"],
+      "cwd": "/path/to/phasespace-engine"
+    }
+  }
+}
+```
+
+The rule an engineering agent has to obey is that it never computes physics
+in its own head — every number it shows comes from a tool call. A prompt
+cannot enforce that: a model told not to do arithmetic does arithmetic
+anyway, and the failure is silent, because a fabricated number and a
+computed one look identical in a transcript.
+
+So it is enforced mechanically. Every answer carries a provenance block
+with the engine fingerprint, and the bundle is stable sorted JSON, so the
+same question twice is byte-identical and the digest means something. A
+number without one did not come from the server.
+
+Every answer also states its own limits in the same payload as the number,
+rather than as a footnote that gets dropped on the way to a user. Ask for a
+nodal operating point and it volunteers that the intersection is not
+validated. Ask for a traverse on a dry gas well and it tells you the
+default correlation is the wrong one, with both error figures.
+
+And a refusal is a result rather than an exception, because an agent can
+read a sentence and act on it but cannot reason about a traceback — what it
+does with one is retry, or fill the gap itself. Ask about scale and it
+names the six water-chemistry values it would need. Feed it sour gas and it
+cites NACE MR0175 instead of running a CO₂ correlation. Hand it a rising
+production history and it refuses rather than forcing an Arps fit.
+
+Seven tools, implemented against the standard library with no SDK, so it
+runs from a stock Python on an air-gapped box. See
+[phasespace/mcp/README.md](phasespace/mcp/README.md).
+
+
 ## Provenance
 
 Every answer can carry the SHA-256 fingerprint of the engine source that

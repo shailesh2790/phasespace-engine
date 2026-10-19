@@ -1,0 +1,136 @@
+# The PhaseSpace MCP server
+
+The engine as tools an agent may call, over the Model Context Protocol.
+
+```bash
+python -m phasespace.mcp --list      # the catalogue
+python -m phasespace.mcp             # serve on stdio
+```
+
+Client configuration, for Claude Desktop, Claude Code, or anything else
+that speaks MCP over stdio:
+
+```json
+{
+  "mcpServers": {
+    "phasespace": {
+      "command": "python",
+      "args": ["-m", "phasespace.mcp"],
+      "cwd": "/path/to/PhaseSpace"
+    }
+  }
+}
+```
+
+## Why this exists
+
+The rule an engineering agent has to obey is one sentence:
+
+> *"They never compute physics in their head. Every number an agent shows
+> comes from a tool call to the engine, the optimiser or a surrogate, and
+> the call is logged."*
+
+A prompt cannot enforce that. A language model told not to do arithmetic
+will do arithmetic anyway, and the failure is silent — a plausible number
+with nothing behind it, indistinguishable in a transcript from a computed
+one. That is the single thing that makes an engineering agent unusable, and
+it is not solved by better instructions.
+
+So it is enforced mechanically here instead.
+
+**Every answer carries a provenance block.** Inputs, outputs, correlations
+used, and the SHA-256 fingerprint of the engine source that produced them.
+A number quoted without one did not come from this server, and that is
+checkable after the fact rather than a matter of trust:
+
+```
+provenance: engine b3e4778b235b, bundle 26ecc471e9d5
+```
+
+The bundle is stable, sorted JSON, so the same question twice gives a
+byte-identical bundle and the digest means something. Eighteen months from
+now an auditor can take that fingerprint, check out the matching engine,
+and re-derive the figure.
+
+**Every answer states its own limits, in the same payload as the number.**
+Not as a footnote that gets dropped on the way to a user. Ask for a nodal
+operating point and the answer says, unprompted:
+
+> the traverse underlying this is validated to 2.9% median absolute error
+> on 150 measured gradient surveys; the intersection itself — predicting
+> the rate — is NOT validated
+
+**A refusal is a result, not an exception.** An agent can read a sentence
+and act on it. It cannot reason about a transport error, and what it does
+instead is retry or fill the gap itself. So when the engine cannot answer,
+it returns `isError` with the reason:
+
+> scale saturation is not implemented, and deliberately so. Calcite and
+> barite indices need a water analysis — calcium, mg/l; bicarbonate, mg/l;
+> barium, mg/l; sulphate, mg/l; … — and no archive this engine reads
+> carries one. A saturation index computed from assumed chemistry is a
+> number about the assumption. Ask the operator for these values.
+
+## The tools
+
+| tool | answers | refuses when |
+|---|---|---|
+| `well_pressure_traverse` | bottomhole pressure, and pressure, holdup and regime at every depth | the well is producing nothing |
+| `well_nodal_analysis` | the operating point where inflow meets outflow | the curves do not intersect — the well is dead at that wellhead pressure |
+| `gas_lift_allocate` | how to share limited lift gas, the gain, and the shadow price | a well has fewer than 4 lift tests |
+| `decline_curve_fit` | Arps fit, EUR and the spread the admissible b range implies | the history is flat, rising or too short |
+| `data_quality_check` | whether a set of tags may be fitted or optimised on | — (it reports; `may_fit` is the gate) |
+| `well_integrity_assess` | *where* CO₂ corrosion attacks fastest, not just how fast | the gas is sour, or no CO₂ fraction was given |
+| `scale_saturation` | nothing — it names the water analysis it would need | always, by design |
+
+That last row is deliberate. An agent asked about scale with no tool
+available will reason its way to an answer from nothing. A tool that
+refuses in the agent's own vocabulary is a stronger guard than the absence
+of a tool.
+
+## Units
+
+Field units at the boundary, and every schema states the unit in its
+property description. This is the most likely source of a badly wrong
+answer on the whole surface: a ksc figure read as psia is out by a factor
+of fourteen and the result looks entirely plausible.
+
+- pressures **psia**, absolute, not gauge
+- depths **feet**, temperatures **°F**
+- gas **scf/day**, liquid **stb/day**
+- `inclination_deg` is from *horizontal* — 90 is a vertical well
+
+## No dependencies
+
+The protocol is implemented in `protocol.py` against the standard library.
+There is an official SDK and this does not use it, for a product reason
+rather than a preference: this has to run on an edge box, an on-premise
+server and a private cloud, fully offline. A server that runs from a stock
+Python with no `pip install` is one fewer thing to get through someone's IT
+security review, and on an air-gapped site it is the difference between
+working and not.
+
+`stdout` belongs to the protocol. `serve()` redirects `sys.stdout` for the
+duration of a session, so an engine module that grows a stray `print`
+cannot corrupt the stream — a failure that otherwise looks like a client
+mysteriously unable to parse a reply.
+
+## What is not here yet
+
+- **An approval gate.** Nothing in this surface writes anything, so
+  there is no approval gate to build yet. When a tool can change a
+  setpoint, it needs one first.
+- **An audit log.** Every call already produces a provenance
+  bundle, which is the hard part. What is missing is the append-only store
+  that keeps them, and the export. Note that `phasespace/sim/audit.py` is
+  *not* this — it is a production-history audit, an unrelated thing with a
+  colliding name.
+- **The agents themselves.** This is the tool surface they stand on. The
+  agents that would use it — a data steward, a calibrator, an
+  optimisation analyst, a study runner, a reporter — are orchestration
+  over these calls.
+- **Surrogates.** Deliberately absent for now. A 500-well field solve is
+  0.83 s measured, single-threaded and without a GPU, so nothing on this
+  surface needs speeding up. A learned model belongs in an optimiser's
+  inner loop, where thousands of evaluations turn 0.83 s into hours, not
+  in single answers where the saving is invisible.
