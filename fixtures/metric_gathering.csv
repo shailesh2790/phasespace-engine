@@ -1,0 +1,14 @@
+record,id,name,kind,pressure_psia,demand_mmscfd,elevation_ft,from,to,device,diameter_in,length_mi,setpoint
+node,0,Separator,source,7,0,0,,,,,,
+node,1,Header,offtake,0,0,0,,,,,,
+branch,,Trunk,,,,,1,0,pipe,304.8,3000,0
+node,2,W-01,source,18,0,0,,,,,,
+branch,,FL-W-01,,,,,2,1,pipe,101.6,1500,0
+node,3,W-02,source,17,0,0,,,,,,
+branch,,FL-W-02,,,,,3,1,pipe,101.6,1500,0
+node,4,W-03,source,16,0,0,,,,,,
+branch,,FL-W-03,,,,,4,1,pipe,101.6,1500,0
+node,5,W-04,source,15,0,0,,,,,,
+branch,,FL-W-04,,,,,5,1,pipe,101.6,1500,0
+node,6,W-05,source,14,0,0,,,,,,
+branch,,FL-W-05,,,,,6,1,pipe,101.6,1500,0

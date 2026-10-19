@@ -1,0 +1,25 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Benchmark data is downloaded, never committed. validation/fetch_3w.py
+# pulls Petrobras 3W; it is CC BY 4.0 and large, and it does not belong
+# in a git history.
+data/
+
+# No measurement data in this repository, ever. See CONTRIBUTING.md and
+# tests/test_nothing_private_ships.py, which enforces this.
+*.xlsx
+*.xls
+*.xlsm
+*.npz
+*.h5
+*.parquet
+
+# Local list of operator identifiers for a private fork. Never tracked.
+.private-markers

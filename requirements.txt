@@ -1,0 +1,20 @@
+# The engine itself needs numpy and the standard library. Everything below
+# that line is for running the tests and the public benchmark.
+numpy>=1.24
+
+# Optional but recommended. scipy is used for sparse linear algebra in the
+# network solver and for bounded least squares in calibration; without it
+# the engine falls back to dense numpy and still gives the same answers.
+scipy>=1.10
+
+# Tests.
+pytest>=7.0
+
+# The public 3W benchmark reads Parquet well records.
+pandas>=2.0
+pyarrow>=14.0
+
+# Needed only to TRAIN the rod-pump card classifier. Inference is pure
+# numpy by design, and a test asserts scikit-learn never reaches the
+# inference path. Tests that train are skipped if it is absent.
+scikit-learn>=1.3
