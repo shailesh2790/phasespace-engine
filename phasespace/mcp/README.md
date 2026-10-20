@@ -115,22 +115,73 @@ duration of a session, so an engine module that grows a stray `print`
 cannot corrupt the stream — a failure that otherwise looks like a client
 mysteriously unable to parse a reply.
 
+## Recording what was answered
+
+A provenance bundle that exists only in one reply is evidence nobody can
+retrieve. Point the server at a file and every call lands in an
+append-only ledger:
+
+```bash
+PHASESPACE_LEDGER=evidence.jsonl python -m phasespace.mcp
+PHASESPACE_LEDGER=evidence.jsonl python -m phasespace.mcp --verify
+```
+
+```
+2 records, chain intact
+head:   70f468b66b04477ac7f92fb788b9aa7daaa5352bf3bff62abddf165d39adc9b0
+engines: b3e4778b235b
+  scale_saturation           1
+  well_pressure_traverse     1
+```
+
+One JSON object per line, each carrying the digest of the record before
+it. Not a database: the engine is meant to run on an edge box inside a
+customer's network, and a text file is the only format an auditor can read
+without asking for the software. **Refusals are recorded too** — what was
+asked and why it could not be answered is what someone reconstructing a
+decision needs most.
+
+It is off unless you set the variable, because a serverless filesystem is
+ephemeral and recording evidence that silently disappears is worse than
+recording none. The startup banner says which state you are in, so a
+deployment that believes it is recording and is not does not look
+identical to one that is.
+
+**What the chain does and does not prove.** It detects an edited value, a
+deleted record, a reordering, and a removed beginning — `verify` names the
+first record where the file stops being self-consistent. It does *not*
+prevent tampering: anyone who can write the file can rewrite it whole and
+recompute the chain, and the result verifies cleanly. There is a test that
+demonstrates exactly that, so the guarantee does not get quoted without
+its limit. The chain raises the cost of a quiet edit from changing one
+number to rewriting every record after it, and makes a careless edit
+certain to be caught.
+
+What closes the gap costs nothing: publish the head digest somewhere the
+writer cannot reach — another system, a colleague, a counterparty. A
+rewritten chain cannot match a digest that is already elsewhere.
+
+It is also not a signature, and the timestamps are whatever the machine
+believed.
+
+
 ## What is not here yet
 
 - **An approval gate.** Nothing in this surface writes anything, so
   there is no approval gate to build yet. When a tool can change a
   setpoint, it needs one first.
-- **An audit log.** Every call already produces a provenance
-  bundle, which is the hard part. What is missing is the append-only store
-  that keeps them, and the export. Note that `phasespace/sim/audit.py` is
-  *not* this — it is a production-history audit, an unrelated thing with a
-  colliding name.
+- **Somewhere durable to keep the ledger on a serverless host.** The
+  ledger above covers a self-hosted deployment, which is the one this is
+  aimed at. On a platform with an ephemeral filesystem it needs object
+  storage or the customer's own historian behind it, and that is not
+  written. Note also that `phasespace/sim/audit.py` is unrelated despite
+  the name -- it is a production-history audit, and the collision is how
+  the absence of a real ledger stayed invisible for a while.
 - **The agents themselves.** This is the tool surface they stand on. The
-  agents that would use it — a data steward, a calibrator, an
-  optimisation analyst, a study runner, a reporter — are orchestration
+  agents that would use it -- a data steward, a calibrator, an
+  optimisation analyst, a study runner, a reporter -- are orchestration
   over these calls.
-- **Surrogates.** Deliberately absent for now. A 500-well field solve is
-  0.83 s measured, single-threaded and without a GPU, so nothing on this
-  surface needs speeding up. A learned model belongs in an optimiser's
-  inner loop, where thousands of evaluations turn 0.83 s into hours, not
-  in single answers where the saving is invisible.
+- **Surrogates.** Deliberately absent for now. A field solve is 0.83 s
+  measured, so nothing here needs speeding up. Surrogates belong in the
+  optimiser's inner loop, where thousands of evaluations turn 0.83 s into
+  hours, not in single answers where the saving is invisible.

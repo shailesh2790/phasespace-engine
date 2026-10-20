@@ -51,10 +51,23 @@ STAMP_FILE = ENGINE_DIR / "_fingerprint.txt"
 FINGERPRINT_LENGTH = 12
 
 
+# Modules that are not equations. The fingerprint answers one question --
+# "did the physics change?" -- and a stamp that also moves when the
+# bookkeeping around the physics changes answers it less well: every false
+# alarm is a reason for someone to stop reading the stamp. `provenance`
+# itself and `ledger` record and store answers; neither computes one.
+#
+# This list is a judgement with a cost, so it is stated rather than
+# implied: a change to either of these modules is invisible to the
+# fingerprint, and a bug in how a result is *recorded* would not be caught
+# by it. `tests/test_reproducibility.py` covers them instead.
+NOT_PHYSICS = ("__init__.py", "provenance.py", "ledger.py")
+
+
 def _engine_sources():
     return sorted(
         path for path in ENGINE_DIR.glob("*.py")
-        if path.name not in ("__init__.py", "provenance.py")
+        if path.name not in NOT_PHYSICS
     )
 
 

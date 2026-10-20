@@ -216,6 +216,41 @@ fingerprint the commercial build reports — so the engine that produced
 the validation figures in the table is the engine you just cloned, not a
 reduced version of it. If the two ever diverge, the hash says so.
 
+## Keeping the evidence
+
+A provenance bundle that exists only in one reply is evidence nobody can
+retrieve. Point the server at a file and every call is recorded, refusals
+included:
+
+```bash
+PHASESPACE_LEDGER=evidence.jsonl python -m phasespace.mcp
+PHASESPACE_LEDGER=evidence.jsonl python -m phasespace.mcp --verify
+```
+
+```
+2 records, chain intact
+head:   70f468b66b04477ac7f92fb788b9aa7daaa5352bf3bff62abddf165d39adc9b0
+engines: b3e4778b235b
+```
+
+One JSON object per line, each carrying the digest of the record before it.
+`verify` detects an edited value, a deleted record, a reordering, or a
+removed beginning, and names the first record where the file stops being
+self-consistent.
+
+**It is tamper-evident, not tamper-proof**, and the distinction is in the
+tests rather than the small print: anyone who can write the file can
+rewrite it whole and recompute the chain, and the result verifies cleanly.
+`test_a_whole_rewrite_verifies_cleanly_and_that_is_the_known_limit`
+demonstrates it. What the chain buys is raising the cost of a quiet edit
+from changing one number to rewriting every record after it, and making a
+careless edit certain to be caught. Publishing the head digest somewhere
+the writer cannot reach is what closes the rest.
+
+It is not a signature either, and the timestamps are whatever the machine
+believed.
+
+
 ## Running the tests
 
 ```bash

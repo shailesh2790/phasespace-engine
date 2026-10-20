@@ -40,6 +40,8 @@ from __future__ import annotations
 import json
 import sys
 
+from .registry import text_content
+
 PROTOCOL_VERSION = "2024-11-05"
 
 # JSON-RPC 2.0 reserved codes.
@@ -83,11 +85,6 @@ def response(request_id, result: dict) -> dict:
 def error(request_id, code: int, message: str) -> dict:
     return {"jsonrpc": "2.0", "id": request_id,
             "error": {"code": code, "message": message}}
-
-
-def text_content(text: str, is_error: bool = False) -> dict:
-    """A tools/call result carrying one text block."""
-    return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
 class Server:

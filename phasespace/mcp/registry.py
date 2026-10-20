@@ -37,7 +37,16 @@ import traceback
 
 from phasespace.sim.provenance import Provenance, engine_fingerprint
 
-from .protocol import text_content
+
+def text_content(text: str, is_error: bool = False) -> dict:
+    """A tool result carrying one text block.
+
+    Defined here rather than in `protocol`, because the shape of a result
+    belongs to the tool surface and not to the wire: the HTTP transport
+    returns these too, and it has no stdio protocol to import. The
+    dependency runs transport -> results, never the other way.
+    """
+    return {"content": [{"type": "text", "text": text}], "isError": is_error}
 
 
 class Tool:
@@ -69,8 +78,16 @@ class Refusal(Exception):
 class Registry:
     """Holds the tools and turns each call into a provenance-stamped answer."""
 
-    def __init__(self):
+    def __init__(self, ledger=None):
         self._tools = {}
+        # Optional, and off unless a deployment supplies one. A bundle
+        # that exists only in one reply is evidence nobody can retrieve,
+        # so a self-hosted deployment passes a `Ledger` here and every
+        # answer -- refusals included -- lands in an append-only file an
+        # auditor can take away. Not the default, because a serverless
+        # filesystem is ephemeral: recording evidence that silently
+        # disappears is worse than recording none.
+        self.ledger = ledger
 
     def add(self, tool: Tool) -> None:
         self._tools[tool.name] = tool
@@ -145,9 +162,26 @@ class Registry:
             % (bundle.engine, bundle.digest))
         parts.append("```json\n%s\n```" % bundle.to_json())
 
+        # Recorded here rather than at each call site because every path
+        # through this class converges on `_render`, answers and refusals
+        # alike. A refusal is evidence too: what was asked, and why it
+        # could not be answered, is what an auditor reconstructing a
+        # decision needs most.
+        recorded = ""
+        if self.ledger is not None:
+            try:
+                recorded = self.ledger.append(bundle).digest
+            except (OSError, ValueError, TypeError) as exc:
+                # A ledger that cannot write must not swallow the answer:
+                # the caller asked a question and the engine answered it.
+                # The failure goes into the payload so it is visible.
+                parts.insert(-1, "- this answer was NOT recorded in the "
+                                 "audit ledger: %s" % exc)
+
         return {"content": [{"type": "text", "text": "\n\n".join(parts)}],
                 "isError": is_error,
                 # Structured mirror of the same answer, for the audit log and
                 # for any caller that would rather parse than read.
                 "_meta": {"provenance": bundle.to_dict(),
-                          "engine_fingerprint": engine_fingerprint()}}
+                          "engine_fingerprint": engine_fingerprint(),
+                          "ledger_digest": recorded}}
