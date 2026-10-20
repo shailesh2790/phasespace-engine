@@ -44,7 +44,7 @@ A number quoted without one did not come from this server, and that is
 checkable after the fact rather than a matter of trust:
 
 ```
-provenance: engine b3e4778b235b, bundle 26ecc471e9d5
+provenance: engine 61c9045ea5ee, bundle 26ecc471e9d5
 ```
 
 The bundle is stable, sorted JSON, so the same question twice gives a
@@ -129,7 +129,7 @@ PHASESPACE_LEDGER=evidence.jsonl python -m phasespace.mcp --verify
 ```
 2 records, chain intact
 head:   70f468b66b04477ac7f92fb788b9aa7daaa5352bf3bff62abddf165d39adc9b0
-engines: b3e4778b235b
+engines: 61c9045ea5ee
   scale_saturation           1
   well_pressure_traverse     1
 ```

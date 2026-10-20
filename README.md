@@ -202,7 +202,7 @@ from the build that made it:
 
 ```python
 from phasespace.sim.provenance import engine_fingerprint, verify_fingerprint
-engine_fingerprint()     # 'b3e4778b235b'
+engine_fingerprint()     # '61c9045ea5ee'
 verify_fingerprint()     # (True, stamped, computed)
 ```
 
@@ -215,6 +215,44 @@ computed from the source in *this* repository, and it is the same
 fingerprint the commercial build reports — so the engine that produced
 the validation figures in the table is the engine you just cloned, not a
 reduced version of it. If the two ever diverge, the hash says so.
+
+## Measuring what a recommendation delivered
+
+An optimiser that says "+10 bbl/d" and is never checked is a guess with a
+decimal point. `phasespace/sim/actions.py` carries a recommendation from
+proposal through a named engineer's approval to a measurement of what it
+actually produced.
+
+The measurement is the hard part, because production moves for a dozen
+reasons at once and the convenient ones are easy to claim:
+
+| how the number goes wrong | what happens |
+|---|---|
+| unsubtracted decline | the baseline is carried forward along the well's own fitted curve |
+| two changes on one well | **refused** — no split from one well's history is defensible |
+| uptime moved | **refused** above 15% drift |
+| window under 7 days | **refused** |
+
+The decline correction does not bias the way people assume. On a well
+declining 30%/yr, a month-on-month rise of 8.0 bbl/d is a gain of **10.4**
+against where the well was actually heading — so failing to correct
+*understates* the result, because the action is not credited for the fall
+it prevented. On a rising well it overstates. Both directions are in the
+docstring with the worked numbers.
+
+And the ceiling on all of it: this measures association. The well did
+better after the change, which is not the same as better *because* of it.
+Only a control — a comparable well left alone — supports the stronger
+word, and every measurement carries that sentence so it cannot be dropped
+on the way to a slide.
+
+The scorecard is deliberately unflattering. Losses count in the total
+rather than being dropped as outliers, refusals stay visible so an
+unmeasurable action cannot quietly flatter the ratio by selection, and
+below five measured actions it reports **no field ratio at all** — a ratio
+from two actions is a story about two wells, and it will be quoted as a
+track record.
+
 
 ## Keeping the evidence
 
@@ -230,7 +268,7 @@ PHASESPACE_LEDGER=evidence.jsonl python -m phasespace.mcp --verify
 ```
 2 records, chain intact
 head:   70f468b66b04477ac7f92fb788b9aa7daaa5352bf3bff62abddf165d39adc9b0
-engines: b3e4778b235b
+engines: 61c9045ea5ee
 ```
 
 One JSON object per line, each carrying the digest of the record before it.
