@@ -8,7 +8,7 @@ get valid JSON-RPC back, including when the request is nonsense.
 The guarantee: *every* number that leaves this server carries a provenance
 block with the engine fingerprint, and a tool that cannot answer refuses in
 a sentence an agent can act on rather than raising or, worse, guessing. The
-rule is "never compute physics in your head", and
+PRD's agent layer rests on "they never compute physics in their head", and
 a prompt cannot enforce that. These tests are what enforcement looks like.
 """
 import json
@@ -266,8 +266,8 @@ def test_nodal_says_the_intersection_is_not_validated(registry):
 
 
 def test_gas_lift_allocation_reports_a_shadow_price(registry):
-    """An optimiser has to report the gain per action and the shadow price of
-    each constraint. The shadow price is the whole economic answer: it is what
+    """FR-5 asks for the gain per action and the shadow price of each
+    constraint. The shadow price is the whole economic answer: it is what
     another unit of compression is worth."""
     result = call(registry, "gas_lift_allocate",
                   WORKING_CALLS["gas_lift_allocate"])
@@ -290,7 +290,7 @@ def test_gas_lift_refuses_a_well_with_too_few_tests(registry):
 
 
 def test_data_quality_blocks_a_frozen_tag(registry):
-    """Quality before calibration: a frozen tag must stop a fit rather than
+    """FR-2 before FR-3: a frozen tag must stop a calibration rather than
     silently anchor it."""
     result = call(registry, "data_quality_check",
                   {"tags": {"WHP": [250.0] * 60,
@@ -360,3 +360,163 @@ WORKING_CALLS = {
         "co2_fraction": 0.02, "water_cut": 0.5,
     },
 }
+
+
+# ------------------------------------------- measuring what was delivered --
+
+CLEAN_BEFORE = {"days": 30.0, "total_volume": 3000.0}
+CLEAN_AFTER = {"days": 30.0, "total_volume": 3240.0}
+DECLINE = {"qi": 100.0, "di_per_year": 0.30, "b": 0.5}
+
+
+def test_measuring_a_recommendation_subtracts_the_wells_decline(registry):
+    """The bias runs the way people do not expect. Without the correction
+    this reads as +8.0; the well would have fallen to 97.6 on its own, so
+    the action is worth 10.4 against where it was actually heading."""
+    result = call(registry, "measure_recommendation", {
+        "well": "W-1", "forecast_gain": 10.0, "approved_by": "S. Tripathi",
+        "before": CLEAN_BEFORE, "after": CLEAN_AFTER, "decline": DECLINE})
+
+    assert result["isError"] is False
+    outputs = bundle(result)["outputs"]
+    assert outputs["expected_rate_without_action"] == pytest.approx(97.6, abs=0.1)
+    assert outputs["realised_gain"] == pytest.approx(10.4, abs=0.1)
+    assert outputs["realised_fraction"] > 1.0
+    assert "association, not causation" in outputs["basis"]
+
+
+def test_an_unsigned_approval_is_refused(registry):
+    """A record saying 'approved' without saying by whom cannot answer the
+    only question an audit asks of one afterwards."""
+    result = call(registry, "measure_recommendation", {
+        "well": "W-1", "forecast_gain": 10.0, "approved_by": "",
+        "before": CLEAN_BEFORE, "after": CLEAN_AFTER})
+    assert result["isError"] is True
+    assert "named person" in body(result)
+
+
+def test_a_second_change_on_the_same_well_is_refused(registry):
+    result = call(registry, "measure_recommendation", {
+        "well": "W-1", "forecast_gain": 10.0, "approved_by": "S. Tripathi",
+        "before": CLEAN_BEFORE, "after": CLEAN_AFTER,
+        "other_actions_on_this_well": ["A-7"]})
+    assert result["isError"] is True
+    assert "A-7" in body(result)
+    assert "separately credited" in body(result)
+
+
+def test_uptime_drift_is_refused_through_the_tool(registry):
+    result = call(registry, "measure_recommendation", {
+        "well": "W-1", "forecast_gain": 10.0, "approved_by": "S. Tripathi",
+        "before": {"days": 30.0, "total_volume": 1500.0,
+                   "days_on_production": 15.0},
+        "after": {"days": 30.0, "total_volume": 3000.0,
+                  "days_on_production": 30.0}})
+    assert result["isError"] is True
+    assert "uptime moved" in body(result)
+
+
+def test_the_scorecard_refuses_a_ratio_from_too_few_actions(registry):
+    result = call(registry, "recommendation_scorecard", {
+        "measured": [{"forecast_gain": 10.0, "realised_gain": 8.0},
+                     {"forecast_gain": 10.0, "realised_gain": 9.0}]})
+    assert result["isError"] is False
+    assert bundle(result)["outputs"]["realised_fraction"] is None
+    assert "too few" in body(result)
+
+
+def test_the_scorecard_counts_losses_in_the_total(registry):
+    """Four actions at +8 and one at -10 against 50 forecast is 44%, not
+    the 64% you get by dropping the loss as an outlier."""
+    result = call(registry, "recommendation_scorecard", {
+        "measured": [{"forecast_gain": 10.0, "realised_gain": 8.0}] * 4
+                    + [{"forecast_gain": 10.0, "realised_gain": -10.0}]})
+    outputs = bundle(result)["outputs"]
+    assert outputs["losses"] == 1
+    assert outputs["total_realised"] == pytest.approx(22.0)
+    assert outputs["realised_fraction"] == pytest.approx(0.44)
+
+
+def test_the_scorecard_keeps_refusals_and_rejections_visible(registry):
+    """An unmeasurable action that vanished would flatter the ratio by
+    selection, and the rejection count is a measure of the optimiser."""
+    result = call(registry, "recommendation_scorecard", {
+        "measured": [{"forecast_gain": 10.0, "realised_gain": 8.0}] * 5,
+        "not_measurable": 2, "rejected": 3})
+    outputs = bundle(result)["outputs"]
+    assert outputs["not_measurable"] == 2
+    assert outputs["rejected"] == 3
+    assert outputs["approval_rate"] == pytest.approx(7 / 10)
+    assert any("rejected by an engineer" in n for n in bundle(result)["notes"])
+
+
+def test_an_empty_scorecard_refuses_rather_than_reporting_zero(registry):
+    result = call(registry, "recommendation_scorecard", {"measured": []})
+    assert result["isError"] is True
+    assert "nothing to score" in body(result)
+
+
+# ------------------------------------------------- the reservoir, guarded --
+
+
+def test_a_reservoir_run_needs_a_named_approval(registry):
+    """It costs minutes to hours of compute rather than milliseconds, so
+    launching one is a decision and not a query."""
+    result = call(registry, "reservoir_simulate",
+                  {"deck": "x.DATA", "approved_by": "", "minutes_budget": 10})
+    assert result["isError"] is True
+    assert "named engineer's approval" in body(result)
+
+
+@pytest.mark.parametrize("budget", [0.0, -5.0, 10_000.0])
+def test_an_unbounded_compute_budget_is_refused(registry, budget):
+    result = call(registry, "reservoir_simulate",
+                  {"deck": "x.DATA", "approved_by": "S. Tripathi",
+                   "minutes_budget": budget})
+    assert result["isError"] is True
+    assert "compute budget must be between" in body(result)
+
+
+def test_a_missing_deck_names_the_benchmarks_that_do_exist(registry):
+    """An agent that cannot find a deck can at least be told which ones
+    ship with the simulator."""
+    result = call(registry, "reservoir_simulate",
+                  {"deck": "nowhere.DATA", "approved_by": "S. Tripathi",
+                   "minutes_budget": 10})
+    assert result["isError"] is True
+    assert "SPE9" in body(result)
+
+
+def test_a_host_without_julia_says_so_rather_than_timing_out(registry,
+                                                             monkeypatch):
+    """The deployed web application is exactly this case: JutulDarcy needs
+    a 1.8 GB Julia depot and a first-run install measured at 639 s, so a
+    serverless function cannot host it at all. Saying that is more useful
+    than a timeout, and the check comes before the deck check because
+    naming the absent capability beats naming a file it was never going
+    to find.
+    """
+    import importlib.util as util
+    real = util.find_spec
+
+    def absent(name, *args, **kwargs):
+        if name == "jutuldarcy":
+            return None
+        return real(name, *args, **kwargs)
+
+    monkeypatch.setattr(util, "find_spec", absent)
+    result = call(registry, "reservoir_simulate",
+                  {"deck": "nowhere.DATA", "approved_by": "S. Tripathi",
+                   "minutes_budget": 10})
+    assert result["isError"] is True
+    assert "self-hosted capability" in body(result)
+    assert "Nothing is wrong with the request" in body(result)
+
+
+def test_the_reservoir_tool_declares_its_compute_cost_in_the_schema(registry):
+    """So a model choosing between tools knows this one is not free."""
+    schema = next(t for t in registry.schemas()
+                  if t["name"] == "reservoir_simulate")
+    assert "minutes_budget" in schema["inputSchema"]["required"]
+    assert "approved_by" in schema["inputSchema"]["required"]
+    assert "milliseconds" in schema["description"]

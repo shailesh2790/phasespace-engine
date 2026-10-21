@@ -216,6 +216,74 @@ fingerprint the commercial build reports — so the engine that produced
 the validation figures in the table is the engine you just cloned, not a
 reduced version of it. If the two ever diverge, the hash says so.
 
+## Reservoir simulation, and a unit bug worth knowing about
+
+`phasespace/reservoir/` runs [JutulDarcy](https://github.com/sintefmath/JutulDarcy.jl)
+(SINTEF, MIT) — black-oil and compositional, reads Eclipse `.DATA` decks,
+computes adjoint sensitivities. It is optional: `pip install jutuldarcy`,
+which on first import installs a Julia depot measured here at **639 s and
+1.8 GB**.
+
+**It runs in a subprocess, and nothing else imports it.** On the first run
+here, SPE9 solved correctly and the process then died inside PythonCall's
+deallocator with `ConcurrencyViolationError("Vector can not be resized
+concurrently")` — Julia's garbage collector finalising Python objects at
+interpreter teardown. That is a fatal Julia error, not a Python exception,
+so nothing in Python catches it. A worker that writes its answer and exits
+is immune; a long-running server that imports `juliacall` is not.
+
+**One result carries three unit conventions**, established by measurement
+rather than from the documentation:
+
+| | convention |
+|---|---|
+| summary rates and pressures | field units — psia, stb/d |
+| per-cell state arrays | SI — pascals |
+| summary **cumulatives** | **86,400× too large** |
+
+That last one is a real bug, confirmed in JutulDarcy's `src/io.jl`:
+`maybe_cumsum_rate` computes `cumsum(rate .* dt)` where `dt` is in seconds
+while the rate has already been converted to a per-*day* field unit. On
+SPE9's 900 days, `FOPT` reports as `1.7057e12` where its own `FOPR` curve
+integrates to **19,741,876 stb** — exact to machine precision on four
+independent rate/cumulative pairs.
+
+Cumulative production is the input to material balance and to every
+reserves number, and wrong by four and a half orders of magnitude it does
+not look like an error; it looks like a bigger field. `jutul.py` corrects
+it, and
+`test_the_measured_spe9_figures_are_pinned` fails loudly if SINTEF fixes
+it upstream — a correction nobody notices going stale is worse than no
+correction.
+
+`Rs` is passed through **unconverted and labelled as such**: its unit was
+not established by measurement here, and a guessed conversion is worse
+than a raw number with a note on it.
+
+Reproducing any of this needs no operator data — the simulator ships SPE1,
+SPE9, EGG, OLYMPUS and NORNE as downloadable benchmarks.
+
+## Static pressures, referenced to a datum
+
+`phasespace/sim/datum.py` moves a shut-in bottomhole pressure to a common
+datum using the survey's own measured gradient. Which gradient matters: a
+shut-in well has gas standing above liquid, and the two differ by more
+than ten times, so correcting with the wrong one invents reservoir
+pressure. It refuses to extrapolate more than 1,000 ft below the deepest
+reading, because below the deepest gauge nobody knows what the well is
+full of — which is exactly where a gas-liquid contact tends to sit.
+
+A finding from applying it to 227 real static surveys, reported because
+the negative result is the more useful one: the datum correction reversed
+the fitted pressure trend on **0 of 20 wells** and changed residual
+scatter by a median of **0.0%**. It is still necessary — comparing
+pressures read 3,852 ft apart is wrong whatever the outcome — but it was
+not what stood between the numbers and a usable history. Grouping the
+surveys by *pay sand* was: 15 of 44 wells had surveys from more than one
+sand, and separating them dropped median scatter from several hundred psi
+to 55.
+
+
 ## Measuring what a recommendation delivered
 
 An optimiser that says "+10 bbl/d" and is never checked is a guess with a

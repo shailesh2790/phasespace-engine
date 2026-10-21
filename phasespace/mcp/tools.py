@@ -24,7 +24,20 @@ confidence than it has.
 """
 from __future__ import annotations
 
-from phasespace.sim.decline import fit_arps
+import importlib.util
+import os
+import subprocess
+import tempfile
+
+from phasespace.sim.actions import (
+    MEASURED,
+    MIN_ACTIONS_FOR_A_RATIO,
+    Action,
+    Measurement,
+    Scorecard,
+    Window,
+)
+from phasespace.sim.decline import ArpsDecline, fit_arps
 from phasespace.sim.fluids import GasProperties, LiquidProperties
 from phasespace.sim.gaslift import GasLiftWell, allocate
 from phasespace.sim.integrity import assess, scale_inputs
@@ -550,6 +563,399 @@ def scale_prediction(_args: dict) -> dict:
         "operator for these values." % "; ".join(scale_inputs()))
 
 
+# ------------------------------------------------- what it actually did --
+
+MEASURE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "well": {"type": "string"},
+        "change": {"type": "string",
+                   "description": "what was done, in words"},
+        "forecast_gain": {
+            "type": "number",
+            "description": "what the optimiser expected, per producing day"},
+        "approved_by": {
+            "type": "string",
+            "description": "the engineer who approved it. Required, and a "
+                           "person rather than a role: a record saying "
+                           "'approved' without saying by whom cannot answer "
+                           "the question an audit asks of one."},
+        "before": {
+            "type": "object",
+            "description": "the window before the change",
+            "properties": {
+                "days": {"type": "number"},
+                "total_volume": {"type": "number"},
+                "days_on_production": {
+                    "type": "number",
+                    "description": "separates a real gain from a well that "
+                                   "was simply up more"},
+            },
+            "required": ["days", "total_volume"],
+        },
+        "after": {
+            "type": "object",
+            "description": "the window after it",
+            "properties": {
+                "days": {"type": "number"},
+                "total_volume": {"type": "number"},
+                "days_on_production": {"type": "number"},
+            },
+            "required": ["days", "total_volume"],
+        },
+        "decline": {
+            "type": "object",
+            "description": "the well's own fitted decline, as returned by "
+                           "decline_curve_fit. Without it the baseline is "
+                           "held flat, which biases the answer in a "
+                           "direction that depends on the well.",
+            "properties": {
+                "qi": {"type": "number"},
+                "di_per_year": {"type": "number"},
+                "b": {"type": "number"},
+            },
+        },
+        "other_actions_on_this_well": {
+            "type": "array", "items": {"type": "string"},
+            "description": "ids of any other change made to this well in "
+                           "the same window",
+        },
+    },
+    "required": ["well", "forecast_gain", "approved_by", "before", "after"],
+}
+
+
+def _window(raw, which: str) -> Window:
+    if not isinstance(raw, dict):
+        raise ValueError("%s must be an object with days and total_volume"
+                         % which)
+    return Window(days=float(raw.get("days", 0.0)),
+                  total_volume=float(raw.get("total_volume", 0.0)),
+                  days_on_production=float(raw.get("days_on_production", 0.0)))
+
+
+def measure_recommendation(args: dict) -> dict:
+    _require(args, "well", "forecast_gain", "approved_by", "before", "after")
+
+    action = Action(action_id=str(args.get("action_id", "measured")),
+                    well=str(args["well"]),
+                    change=str(args.get("change", "")),
+                    forecast_gain=float(args["forecast_gain"]),
+                    proposed_by="optimiser")
+    try:
+        action.approve(by=str(args["approved_by"])).execute()
+    except ValueError as exc:
+        raise Refusal(str(exc))
+
+    decline = None
+    raw = args.get("decline")
+    if isinstance(raw, dict) and raw.get("qi"):
+        decline = ArpsDecline(qi=float(raw["qi"]),
+                              di_per_year=float(raw.get("di_per_year", 0.0)),
+                              b=float(raw.get("b", 0.0)))
+
+    # Only their existence matters here, not their contents: the rule is
+    # that a second change to the same well in the same window makes
+    # neither separately creditable.
+    others = [Action(action_id=str(other), well=str(args["well"]),
+                     change="", forecast_gain=0.0)
+              for other in (args.get("other_actions_on_this_well") or [])]
+
+    measurement = action.measure(_window(args["before"], "before"),
+                                 _window(args["after"], "after"),
+                                 decline=decline,
+                                 other_actions_in_window=others)
+
+    if not measurement.usable:
+        raise Refusal(measurement.describe())
+
+    return {
+        "summary": ("%s: forecast %+.1f, realised %+.1f -- %.0f%% of "
+                    "forecast."
+                    % (action.well, measurement.forecast_gain,
+                       measurement.realised_gain,
+                       measurement.realised_fraction * 100.0)),
+        "outputs": {
+            "forecast_gain": measurement.forecast_gain,
+            "realised_gain": measurement.realised_gain,
+            "realised_fraction": measurement.realised_fraction,
+            "baseline_rate": measurement.baseline_rate,
+            "expected_rate_without_action":
+                measurement.expected_rate_without_action,
+            "actual_rate": measurement.actual_rate,
+            "approved_by": action.decided_by,
+            "basis": measurement.basis,
+        },
+        "notes": list(measurement.notes),
+        "correlations": (["baseline carried forward along the well's own "
+                          "Arps decline"] if decline else
+                         ["baseline held flat -- no decline curve supplied"]),
+        "envelopes": [measurement.basis],
+    }
+
+
+SCORECARD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "measured": {
+            "type": "array",
+            "description": "one entry per measured action",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "well": {"type": "string"},
+                    "forecast_gain": {"type": "number"},
+                    "realised_gain": {"type": "number"},
+                },
+                "required": ["forecast_gain", "realised_gain"],
+            },
+        },
+        "not_measurable": {
+            "type": "integer",
+            "description": "actions that could not be scored, counted so "
+                           "they cannot be quietly dropped"},
+        "rejected": {
+            "type": "integer",
+            "description": "proposals an engineer declined"},
+    },
+    "required": ["measured"],
+}
+
+
+def recommendation_scorecard(args: dict) -> dict:
+    """Field arithmetic over measurements the caller already took.
+
+    This does not re-measure anything. Each realised gain was computed by
+    `measure_recommendation`, with its own decline correction and its own
+    refusals; what is added here is the field total and the one rule that
+    only makes sense across actions -- that too few of them is not a track
+    record.
+    """
+    _require(args, "measured")
+    entries = args["measured"]
+    if not isinstance(entries, list):
+        raise ValueError("measured must be an array")
+    if not entries:
+        raise Refusal("no measured actions were supplied, so there is "
+                      "nothing to score.")
+
+    card = Scorecard()
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            raise ValueError("entry %d is not an object" % (index + 1))
+        action = Action(action_id="A-%d" % (index + 1),
+                        well=str(entry.get("well", "W-%d" % (index + 1))),
+                        change="",
+                        forecast_gain=float(entry["forecast_gain"]),
+                        proposed_by="optimiser")
+        action.approve(by="recorded").execute()
+        action.measurement = Measurement(
+            forecast_gain=float(entry["forecast_gain"]),
+            realised_gain=float(entry["realised_gain"]),
+            baseline_rate=0.0, expected_rate_without_action=0.0,
+            actual_rate=0.0)
+        action.state = MEASURED
+        card.actions.append(action)
+
+    # Counted rather than described, because the only thing the field
+    # arithmetic needs from them is that they existed.
+    for index in range(int(args.get("not_measurable") or 0)):
+        blocked = Action(action_id="unmeasurable-%d" % index, well="-",
+                         change="", forecast_gain=0.0)
+        blocked.approve(by="recorded").execute()
+        blocked.measurement = Measurement(
+            forecast_gain=0.0, realised_gain=0.0, baseline_rate=0.0,
+            expected_rate_without_action=0.0, actual_rate=0.0,
+            usable=False,
+            notes=["reported as not measurable by the caller"])
+        card.actions.append(blocked)
+
+    for index in range(int(args.get("rejected") or 0)):
+        card.actions.append(
+            Action(action_id="R-%d" % index, well="-", change="",
+                   forecast_gain=0.0).reject(by="recorded"))
+
+    fraction = card.realised_fraction()
+    measured = [a for a in card.actions
+                if a.measurement is not None and a.measurement.usable]
+
+    notes = []
+    if fraction is None:
+        notes.append(
+            "no field ratio is reported: there are %d measured actions, and "
+            "fewer than %d is a story about individual wells rather than a "
+            "track record -- it would be quoted as one."
+            % (len(measured), MIN_ACTIONS_FOR_A_RATIO))
+    else:
+        notes.append(
+            "losses are inside this total rather than excluded as outliers: "
+            "%d of %d actions lost production against the well's own "
+            "decline." % (card.losses, len(measured)))
+    if card.rejected:
+        notes.append(
+            "%d of %d proposals were rejected by an engineer. How often "
+            "that happens is a measure of the optimiser, which is why "
+            "rejections are kept." % (card.rejected, card.proposed))
+
+    summary = (("%.0f%% of forecast realised across %d measured actions"
+                % (fraction * 100.0, len(measured))) if fraction is not None
+               else ("%d measured actions -- too few for a field ratio"
+                     % len(measured)))
+
+    return {
+        "summary": summary,
+        "outputs": {
+            "proposed": card.proposed,
+            "approved": card.approved,
+            "rejected": card.rejected,
+            "approval_rate": card.approval_rate,
+            "measured": len(measured),
+            "not_measurable": len(card.actions) - len(measured)
+                              - card.rejected,
+            "total_forecast": card.total_forecast,
+            "total_realised": card.total_realised,
+            "realised_fraction": fraction,
+            "losses": card.losses,
+        },
+        "notes": notes,
+        "envelopes": ["association rather than causation: these wells did "
+                      "better after the changes, which is not the same as "
+                      "better because of them. Only a comparable well left "
+                      "alone would support the stronger word."],
+    }
+
+
+# --------------------------------------------------- the reservoir itself --
+
+RESERVOIR_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "deck": {
+            "type": "string",
+            "description": "path to an Eclipse-format .DATA deck with a "
+                           "corner-point grid"},
+        "approved_by": {
+            "type": "string",
+            "description": "the engineer approving the compute spend. "
+                           "Required: a reservoir run is minutes to hours, "
+                           "not milliseconds, and launching one is a "
+                           "decision rather than a query."},
+        "minutes_budget": {
+            "type": "number",
+            "description": "how long the run may take before it is killed. "
+                           "A 9,000-cell benchmark takes about a minute "
+                           "here; a 44,000-cell field model took 259 s in "
+                           "the simulator's own published benchmark."},
+        "out_dir": {
+            "type": "string",
+            "description": "where to write the results; defaults to a "
+                           "temporary directory"},
+    },
+    "required": ["deck", "approved_by", "minutes_budget"],
+}
+
+# A reservoir run is the one tool on this surface that cannot answer inside
+# a request. The others are milliseconds; this is minutes at best. So it
+# needs both an approval and a budget, which is also what the product
+# requirement says about launching runs above a compute budget.
+MAX_MINUTES_BUDGET = 240.0
+
+
+def reservoir_simulate(args: dict) -> dict:
+    """Run a reservoir deck through JutulDarcy, in a subprocess.
+
+    Refuses rather than fails where it cannot work, and the commonest such
+    place is the deployed web application: JutulDarcy needs a 1.8 GB Julia
+    depot and a ten-minute first-run install, so a serverless function
+    cannot host it at all. Saying that plainly is more useful than a
+    timeout.
+    """
+    _require(args, "deck", "approved_by", "minutes_budget")
+
+    if not str(args["approved_by"]).strip():
+        raise Refusal(
+            "a reservoir run needs a named engineer's approval. It costs "
+            "minutes to hours of compute rather than milliseconds, so "
+            "launching one is a decision, and a decision nobody signed "
+            "cannot answer the question an audit asks of it.")
+
+    budget = float(args["minutes_budget"])
+    if budget <= 0.0 or budget > MAX_MINUTES_BUDGET:
+        raise Refusal(
+            "the compute budget must be between 0 and %.0f minutes, got "
+            "%.1f. An unbounded reservoir run is how someone's cluster "
+            "disappears for a weekend."
+            % (MAX_MINUTES_BUDGET, budget))
+
+    if importlib.util.find_spec("jutuldarcy") is None:
+        raise Refusal(
+            "JutulDarcy is not installed in this deployment, and on a "
+            "serverless host it cannot be: it needs a 1.8 GB Julia depot "
+            "and a first-run install that took 639 s when measured. "
+            "Reservoir simulation is a self-hosted capability -- an edge "
+            "box or an on-premise server -- and this tool works there. "
+            "Nothing is wrong with the request.")
+
+
+    deck = str(args["deck"])
+    if not os.path.isfile(deck):
+        raise Refusal(
+            "no deck at %s. This needs an Eclipse-format .DATA file with a "
+            "corner-point grid; the simulator also ships SPE1, SPE9, EGG, "
+            "OLYMPUS and NORNE as downloadable benchmarks." % deck)
+
+    from phasespace.reservoir.jutul import simulate
+
+    out_dir = args.get("out_dir") or tempfile.mkdtemp(prefix="phasespace-res-")
+    try:
+        run = simulate(deck, out_dir, timeout=budget * 60.0)
+    except subprocess.TimeoutExpired:
+        raise Refusal(
+            "the run exceeded its %.0f-minute budget and was stopped. That "
+            "is the budget working rather than the simulator failing; a "
+            "larger model needs a larger budget, and the published "
+            "benchmark for a 44,000-cell field is 259 s serial."
+            % budget)
+    except RuntimeError as exc:
+        raise Refusal(str(exc))
+
+    curves = run.field_curves
+    summary = ["%d steps over %.0f days, %d wells, %d cells"
+               % (run.steps, float(run.days[-1]) if run.steps else 0.0,
+                  len(run.wells), run.cells)]
+    outputs = {
+        "steps": run.steps,
+        "days": float(run.days[-1]) if run.steps else 0.0,
+        "wells": run.wells,
+        "cells": run.cells,
+        "output_dir": str(out_dir),
+        "solve_seconds": run.meta.get("solve_seconds"),
+    }
+    for key in ("FOPT", "FGPT", "FWPT", "FOPR", "FGPR", "FPR"):
+        if key in curves:
+            outputs[key] = float(curves[key][-1])
+    if "FOPT" in outputs:
+        summary.append("cumulative oil %.0f, field pressure %.0f psia at the "
+                       "end" % (outputs["FOPT"], outputs.get("FPR", 0.0)))
+
+    return {
+        "summary": " -- ".join(summary),
+        "outputs": outputs,
+        "notes": list(run.corrections) + [
+            "approved by %s against a %.0f-minute budget"
+            % (args["approved_by"], budget),
+            "the full result is on disk at %s: per-step field and well "
+            "curves, and per-cell pressure, saturations and Rs" % out_dir],
+        "correlations": ["JutulDarcy (SINTEF, MIT) black-oil / compositional "
+                         "finite-volume solver"],
+        "envelopes": [
+            "verification only: the simulator's authors report matching "
+            "AD-GPRS and MRST, which is code-to-code comparison and so says "
+            "they share assumptions. Whether it describes a particular "
+            "reservoir is a question only measured field data answers."],
+    }
+
+
 # ------------------------------------------------------------- building --
 
 def build_registry() -> Registry:
@@ -593,6 +999,27 @@ def build_registry() -> Registry:
         "rate, because the worst point is often not the hottest. Refuses "
         "sour gas.",
         INTEGRITY_SCHEMA, integrity))
+    registry.add(Tool(
+        "measure_recommendation",
+        "Compare what a change actually delivered against what was "
+        "forecast, with the well's own decline subtracted. Refuses "
+        "when another change touched the same well, when uptime "
+        "moved, or when the window is too short to mean anything.",
+        MEASURE_SCHEMA, measure_recommendation))
+    registry.add(Tool(
+        "recommendation_scorecard",
+        "The field track record across measured recommendations. "
+        "Losses count, refusals stay visible, and below five "
+        "measured actions it reports no ratio at all.",
+        SCORECARD_SCHEMA, recommendation_scorecard))
+    registry.add(Tool(
+        "reservoir_simulate",
+        "Run an Eclipse-format reservoir deck through JutulDarcy "
+        "(SINTEF, MIT) in a subprocess. Minutes to hours rather "
+        "than milliseconds, so it needs a named approval and a "
+        "compute budget. Refuses on a serverless host, where the "
+        "1.8 GB Julia depot cannot be installed.",
+        RESERVOIR_SCHEMA, reservoir_simulate))
     registry.add(Tool(
         "scale_saturation",
         "Not implemented. Call it to learn precisely which water-analysis "

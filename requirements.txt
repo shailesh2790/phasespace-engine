@@ -18,3 +18,11 @@ pyarrow>=14.0
 # numpy by design, and a test asserts scikit-learn never reaches the
 # inference path. Tests that train are skipped if it is absent.
 scikit-learn>=1.3
+
+# Reservoir simulation, and entirely optional. JutulDarcy (SINTEF, MIT) is
+# a Julia simulator; the Python wrapper installs a Julia depot on first
+# import, measured here at 639 s and 1.8 GB. Nothing else in this
+# repository needs it, and `phasespace/reservoir/jutul.py` -- the reader
+# and the unit corrections -- is tested without it.
+#
+#   pip install jutuldarcy
