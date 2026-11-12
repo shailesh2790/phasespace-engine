@@ -1,0 +1,77 @@
+=== the file to paste: .github/workflows/tests.yml ===
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The privacy guard runs first and alone. It is cheap, and if private
+  # material has reached the tree, that is the only thing anyone needs to
+  # know about this commit.
+  privacy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0        # the guard reads the tracked tree
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pytest
+      - run: python -m pytest tests/test_nothing_private_ships.py -q
+
+  test:
+    needs: privacy
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.9", "3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -r requirements.txt
+      - run: python -m pytest tests/ -q
+
+  # `phasespace/sim` claims to run on numpy and the standard library
+  # alone. That is a real constraint, not a preference: it is what lets
+  # the engine deploy into a serverless function with a hard size limit,
+  # where scipy does not fit. An accidental scipy import at module scope
+  # would break that deployment and would not show up in any job above.
+  #
+  # The scope is `sim` only. `phasespace/reservoir` needs scipy at import
+  # and is not under this constraint.
+  numpy-only:
+    needs: privacy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install numpy pytest
+      - name: Import every phasespace/sim module without scipy
+        run: |
+          python - <<'PY'
+          import importlib, pathlib, sys
+          sys.modules["scipy"] = None   # make any import of it fail loudly
+          failed = []
+          for path in sorted(pathlib.Path("phasespace/sim").rglob("*.py")):
+              if path.name == "__init__.py":
+                  continue
+              name = ".".join(path.with_suffix("").parts)
+              try:
+                  importlib.import_module(name)
+              except Exception as exc:
+                  failed.append("%s: %s" % (name, exc))
+          if failed:
+              print("\n".join(failed))
+              sys.exit("modules that cannot import without scipy")
+          print("all phasespace/sim modules import on numpy alone")
+          PY
+Shell cwd was reset to c:\MLProject\SpaceY
